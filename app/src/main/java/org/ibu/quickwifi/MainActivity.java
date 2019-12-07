@@ -1,20 +1,18 @@
 package org.ibu.quickwifi;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.drawable.Drawable;
-import android.location.Location;
-import android.location.LocationManager;
-import android.location.LocationProvider;
 import android.net.wifi.ScanResult;
 import android.net.wifi.WifiManager;
 import android.provider.Settings;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v4.app.ActivityCompat;
-import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.util.Log;
@@ -23,8 +21,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.*;
 
-import java.util.ArrayList;
 import java.util.List;
+
 
 public class MainActivity extends AppCompatActivity {
 
@@ -32,16 +30,24 @@ public class MainActivity extends AppCompatActivity {
 
     private static final int ACCESS_FINE_LOCATION_REQUEST_CODE = 10;
     private static final int GPS_REQUEST_CODE = 11;
-    private WifiManager mWifiManager;
+
+
+    private CWifiManager mCWifiManager;
 
     private ListView mEnabledDeviceListView;
     private LinearLayout mEnabledDeviceBlock;
     private Switch mWifiSwitch;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        initView();
+        mCWifiManager = CWifiManager.getInstance(this);
+        enabledWifi();
+    }
 
+    private void initView(){
         LinearLayout wifiSwitchBlock = findViewById(R.id.wifi_switch_block);
         WifiSwitchListener wifiClickListener = new WifiSwitchListener();
         wifiSwitchBlock.setOnClickListener(wifiClickListener);
@@ -50,20 +56,32 @@ public class MainActivity extends AppCompatActivity {
 
         mEnabledDeviceBlock = findViewById(R.id.enabled_device_block);
         // get wifiManager
-        mWifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
         mEnabledDeviceListView = findViewById(R.id.enabled_device);
+    }
 
-        LocationManager mLocationManager = (LocationManager) getApplicationContext().getSystemService(Context.LOCATION_SERVICE);
-        boolean gpsEnabled = mLocationManager.isProviderEnabled(LocationManager.GPS_PROVIDER);
-        Log.d(TAG, "gps enabled status:" + gpsEnabled);
-        if(gpsEnabled){
-            requestLocationPermission();
-        }else{// setting location to opened status
-            Intent intent = new Intent();
-            intent.setAction(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
-            startActivityForResult(intent, GPS_REQUEST_CODE);
+    private void enabledWifi(){
+        int result = mCWifiManager.enabledWifi();
+        switch (result){
+            case CWifiManager.CUSTOMER_NO_LOCATION:
+                Intent intent = new Intent();
+                intent.setAction(Settings.ACTION_LOCATION_SOURCE_SETTINGS);
+                startActivityForResult(intent, GPS_REQUEST_CODE);
+                break;
+            case CWifiManager.CUSTOMER_NO_ACCESS_FINE_LOCATION_PERMISSION:
+                ActivityCompat.requestPermissions(MainActivity.this,
+                        new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
+                        ACCESS_FINE_LOCATION_REQUEST_CODE);
+                break;
+            case CWifiManager.CUSTOMER_ENABLED_WIFI_SUCCESS:
+                break;
+            case CWifiManager.CUSTOMER_ENABLED_WIFI_FAIL:
+                mCWifiManager.enabledWifi();
+                break;
+            default:
+                break;
         }
     }
+
     class WifiSwitchListener implements View.OnClickListener{
 
         @Override
@@ -77,29 +95,18 @@ public class MainActivity extends AppCompatActivity {
         }
 
         private void toCheckedStatus(){
-            if(!mWifiManager.isWifiEnabled()){
-                mWifiManager.setWifiEnabled(true);
+            if(!mCWifiManager.isWifiEnabled()){
+                mCWifiManager.enabledWifi();
             }
             mEnabledDeviceBlock.setVisibility(View.VISIBLE);
             initEnabledDeviceList();
         }
         private void toUnCheckedStatus(){
+            mCWifiManager.disabledWifi();
             mEnabledDeviceBlock.setVisibility(View.GONE);
         }
     }
-    private void requestLocationPermission(){
-        // getScanResults() need Permission ACCESS_FINE_LOCATION
-        if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-            Log.d(TAG, "no Permission ACCESS_FINE_LOCATION");
-            //申请ACCESS_FINE_LOCATION权限
-            ActivityCompat.requestPermissions(MainActivity.this,
-                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
-                    ACCESS_FINE_LOCATION_REQUEST_CODE);
-        }else{
-            initEnabledDeviceList();
-        }
-    }
+
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
@@ -118,7 +125,7 @@ public class MainActivity extends AppCompatActivity {
         super.onActivityResult(requestCode, resultCode, data);
         switch (requestCode) {
             case GPS_REQUEST_CODE:
-                requestLocationPermission();
+                enabledWifi();
                 break;
             default:
                 break;
@@ -126,27 +133,23 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void initEnabledDeviceList(){
-        mWifiSwitch.setChecked(mWifiManager.isWifiEnabled());
-        if(mWifiManager.isWifiEnabled()){
+        mWifiSwitch.setChecked(mCWifiManager.isWifiEnabled());
+        if(mCWifiManager.isWifiEnabled()){
             mEnabledDeviceBlock.setVisibility(View.VISIBLE);
         }else{
             mEnabledDeviceBlock.setVisibility(View.GONE);
         }
+
         // start scan AP
-        mWifiManager.startScan();
-        Log.d(TAG, "isWifiEnabled");
-        // get scan AP result
-        List<ScanResult> scanResultList = mWifiManager.getScanResults();
-        List<ScanResult> enabledScanResultList = new ArrayList<>();
-        for (ScanResult scanResult: scanResultList) {
-            if(!scanResult.SSID.equals("")){
-                enabledScanResultList.add(scanResult);
+        mCWifiManager.scanAP();
+        mCWifiManager.setScanAPListener(new CWifiManager.OnScanAPListener() {
+            @Override
+            public void onScanFinish(List<ScanResult> scanResultList) {
+                WifiEnabledDeviceAdapter wifiEnabledDeviceAdapter
+                        = new WifiEnabledDeviceAdapter(MainActivity.this, scanResultList);
+                mEnabledDeviceListView.setAdapter(wifiEnabledDeviceAdapter);
             }
-        }
-        Log.d(TAG, scanResultList.size()+"");
-        WifiEnabledDeviceAdapter wifiEnabledDeviceAdapter
-                = new WifiEnabledDeviceAdapter(MainActivity.this, enabledScanResultList);
-        mEnabledDeviceListView.setAdapter(wifiEnabledDeviceAdapter);
+        });
     }
 
     class WifiEnabledDeviceAdapter extends ArrayAdapter<ScanResult> {
@@ -155,14 +158,14 @@ public class MainActivity extends AppCompatActivity {
             super(context,0, list);
             mmEnabledDeviceList = list;
         }
-        
+
         @Override
-        public View getView(final int position, @Nullable View convertView, @NonNull ViewGroup parent) {
+        public View getView(final int position, @Nullable View convertView, @NonNull final ViewGroup parent) {
             convertView = LayoutInflater.from(getContext()).inflate(R.layout.enabled_device_list, null);
             ImageView imageView = convertView.findViewById(R.id.enabled_device_icon);
             TextView textView = convertView.findViewById(R.id.enabled_device_name);
 
-            ScanResult scanResult = mmEnabledDeviceList.get(position);
+            final ScanResult scanResult = mmEnabledDeviceList.get(position);
             Log.d(TAG, scanResult.toString());
             // signal level(calculate rssi)
             int level = WifiManager.calculateSignalLevel(scanResult.level, 5);
@@ -185,11 +188,49 @@ public class MainActivity extends AppCompatActivity {
                 default:
                     break;
             }
+
             Drawable drawable = getResources().getDrawable(drawableSignalLevel,null);
             imageView.setImageDrawable(drawable);
             // wifi name(ssid)
             textView.setText(scanResult.SSID);
+            // set click event for each wifi list item
+            convertView.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    final int keyMgmt = mCWifiManager.checkAPKeyMgmt(scanResult);
 
+                    if(keyMgmt != CWifiManager.KEY_MANAGEMENT_NONE) {
+                        final EditText passwordEdit = new EditText(MainActivity.this);
+                        passwordEdit.setText("");
+                        passwordEdit.setFocusable(true);
+                        final AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+                        builder.setTitle("密码")
+                                .setView(passwordEdit)
+                                .setNegativeButton("取消", null);
+                        builder.setPositiveButton("连接", new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int which) {
+                                if(passwordEdit.getText().toString().length() < 8){
+                                    Toast.makeText(MainActivity.this, "密码不得少于8位", Toast.LENGTH_SHORT).show();
+                                }else {
+                                    if (mCWifiManager.connectAP(keyMgmt, scanResult, passwordEdit.getText().toString())) {
+                                        Toast.makeText(MainActivity.this, "连接成功。", Toast.LENGTH_LONG).show();
+                                    } else {
+                                        Toast.makeText(MainActivity.this, "密码错误，连接失败。", Toast.LENGTH_LONG).show();
+                                    }
+                                }
+                            }
+                        });
+                        builder.show();
+                    }else{
+                        if(mCWifiManager.connectAP(keyMgmt, scanResult, null)){
+                            Toast.makeText(MainActivity.this, "连接成功。", Toast.LENGTH_LONG).show();
+                        }else{
+                            Toast.makeText(MainActivity.this, "密码错误，连接失败。", Toast.LENGTH_LONG).show();
+                        }
+                    }
+
+                }
+            });
             return convertView;
         }
     }
@@ -197,5 +238,7 @@ public class MainActivity extends AppCompatActivity {
     protected void onStart() {
         super.onStart();
         initEnabledDeviceList();
+        System.out.println(mCWifiManager.getConnectionInfo());
     }
 }
+
